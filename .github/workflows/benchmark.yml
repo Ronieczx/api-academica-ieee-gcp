@@ -1,0 +1,91 @@
+name: benchmark-gcp
+
+on:
+  workflow_dispatch:
+    inputs:
+      url_m0:
+        description: "URL de Cloud Run para M0 (base)"
+        required: true
+      url_m1:
+        description: "URL de Cloud Run para M1 (lote sin N+1)"
+        required: true
+      url_m2:
+        description: "URL de Cloud Run para M2 (indice + sargable)"
+        required: true
+      url_m3:
+        description: "URL de Cloud Run para M3 (cache en memoria)"
+        required: true
+      expected_commit:
+        description: "SHA corto del commit desplegado en los 4 entornos"
+        required: true
+
+jobs:
+  medicion_experimental:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias de analisis y smoke test
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-analysis.txt
+
+      - name: Instalar k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Smoke tests (verificar etapa y commit exacto antes de medir)
+        run: |
+          BASE_URL="${{ inputs.url_m0 }}" EXPECTED_STAGE="m0" EXPECTED_COMMIT="${{ inputs.expected_commit }}" python scripts/run_smoke_test.py
+          BASE_URL="${{ inputs.url_m1 }}" EXPECTED_STAGE="m1" EXPECTED_COMMIT="${{ inputs.expected_commit }}" python scripts/run_smoke_test.py
+          BASE_URL="${{ inputs.url_m2 }}" EXPECTED_STAGE="m2" EXPECTED_COMMIT="${{ inputs.expected_commit }}" python scripts/run_smoke_test.py
+          BASE_URL="${{ inputs.url_m3 }}" EXPECTED_STAGE="m3" EXPECTED_COMMIT="${{ inputs.expected_commit }}" python scripts/run_smoke_test.py
+
+      - name: Capturar planes de ejecucion EXPLAIN ANALYZE en PostgreSQL (OE1 y OE3)
+        run: |
+          mkdir -p datos
+          python -c "
+          import json, requests
+          u1 = '${{ inputs.url_m1 }}'.rstrip('/')
+          u2 = '${{ inputs.url_m2 }}'.rstrip('/')
+          out = {
+              'non_sargable_m1': requests.get(f'{u1}/api/v1/explain?stage=m1&batch_size=500', timeout=60).json(),
+              'sargable_indexed_m2': requests.get(f'{u2}/api/v1/explain?stage=m2&batch_size=500', timeout=60).json(),
+          }
+          with open('datos/explain_plans.json', 'w', encoding='utf-8') as f:
+              json.dump(out, f, indent=2, ensure_ascii=False)
+          print('[OK] Planes EXPLAIN ANALYZE guardados en datos/explain_plans.json')
+          "
+
+      - name: Ejecutar campana k6 (4 etapas x 4 tamanos x 35 iteraciones = 560 req, 480 medidas)
+        run: |
+          SIZES="10 50 200 500"
+          for SIZE in $SIZES; do
+            echo "=== Midiendo lote SIZE=${SIZE} ==="
+            k6 run --out csv="datos/raw_m0_${SIZE}.csv"               -e BASE_URL="${{ inputs.url_m0 }}"               -e STAGE="m0"               -e BATCH_SIZE="${SIZE}"               -e COMMIT_SHA="${{ inputs.expected_commit }}"               -e ENFORCE_THRESHOLD="false"               loadtest/consolidacion_k6.js
+
+            k6 run --out csv="datos/raw_m1_${SIZE}.csv"               -e BASE_URL="${{ inputs.url_m1 }}"               -e STAGE="m1"               -e BATCH_SIZE="${SIZE}"               -e COMMIT_SHA="${{ inputs.expected_commit }}"               -e ENFORCE_THRESHOLD="false"               loadtest/consolidacion_k6.js
+
+            k6 run --out csv="datos/raw_m2_${SIZE}.csv"               -e BASE_URL="${{ inputs.url_m2 }}"               -e STAGE="m2"               -e BATCH_SIZE="${SIZE}"               -e COMMIT_SHA="${{ inputs.expected_commit }}"               -e ENFORCE_THRESHOLD="true"               loadtest/consolidacion_k6.js || echo "[AVISO] Umbral superado en M2 SIZE=${SIZE}; CSV conservado."
+
+            k6 run --out csv="datos/raw_m3_${SIZE}.csv"               -e BASE_URL="${{ inputs.url_m3 }}"               -e STAGE="m3"               -e BATCH_SIZE="${SIZE}"               -e COMMIT_SHA="${{ inputs.expected_commit }}"               -e ENFORCE_THRESHOLD="true"               loadtest/consolidacion_k6.js || echo "[AVISO] Umbral superado en M3 SIZE=${SIZE}; CSV conservado."
+          done
+
+      - name: Ejecutar analisis estadistico y generar figuras IEEE
+        run: python scripts/analyze_results.py --data-dir datos --out-dir resultados_resumen
+
+      - name: Guardar artefactos (CSV crudos + EXPLAIN + estadisticos + figuras)
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidencia-experimental-${{ inputs.expected_commit }}
+          path: |
+            datos/raw_*.csv
+            datos/explain_plans.json
+            resultados_resumen/
+          retention-days: 90
