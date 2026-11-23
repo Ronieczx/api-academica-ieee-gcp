@@ -1,28 +1,27 @@
-name: benchmark-gcp
+name: benchmark-cloud
 
 on:
   workflow_dispatch:
-    inputs:
-      url_m0:
-        description: "URL de Cloud Run para M0 (base)"
-        required: true
-      url_m1:
-        description: "URL de Cloud Run para M1 (lote sin N+1)"
-        required: true
-      url_m2:
-        description: "URL de Cloud Run para M2 (indice + sargable)"
-        required: true
-      url_m3:
-        description: "URL de Cloud Run para M3 (cache en memoria)"
-        required: true
-      expected_commit:
-        description: "SHA corto del commit desplegado en los 4 entornos"
-        required: true
 
 jobs:
   medicion_experimental:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: academica_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +31,7 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Instalar dependencias de analisis y smoke test
+      - name: Instalar dependencias fijadas y de analisis
         run: |
           pip install -r requirements.txt
           pip install -r requirements-analysis.txt
@@ -40,23 +39,59 @@ jobs:
       - name: Instalar k6
         uses: grafana/setup-k6-action@v1
 
-      - name: Smoke tests (verificar etapa y commit exacto antes de medir)
+      - name: Poblar base de datos deterministica (200 000 filas, SEED=2026)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/academica_db
         run: |
-          BASE_URL="${{ inputs.url_m0 }}" EXPECTED_STAGE="m0" EXPECTED_COMMIT="${{ inputs.expected_commit }}" python scripts/run_smoke_test.py
-          BASE_URL="${{ inputs.url_m1 }}" EXPECTED_STAGE="m1" EXPECTED_COMMIT="${{ inputs.expected_commit }}" python scripts/run_smoke_test.py
-          BASE_URL="${{ inputs.url_m2 }}" EXPECTED_STAGE="m2" EXPECTED_COMMIT="${{ inputs.expected_commit }}" python scripts/run_smoke_test.py
-          BASE_URL="${{ inputs.url_m3 }}" EXPECTED_STAGE="m3" EXPECTED_COMMIT="${{ inputs.expected_commit }}" python scripts/run_smoke_test.py
+          python scripts/seed_db.py
+
+      - name: Iniciar servicios de las 4 etapas (M0, M1, M2, M3) en segundo plano
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/academica_db
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_ENV
+
+          # Iniciar M0 en puerto 8000
+          ENGINE_STAGE=m0 GIT_COMMIT="${SHORT_SHA}" DATABASE_URL="${DATABASE_URL}" \
+            nohup python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 > /tmp/m0.log 2>&1 &
+          
+          # Iniciar M1 en puerto 8001
+          ENGINE_STAGE=m1 GIT_COMMIT="${SHORT_SHA}" DATABASE_URL="${DATABASE_URL}" \
+            nohup python -m uvicorn api.main:app --host 127.0.0.1 --port 8001 > /tmp/m1.log 2>&1 &
+          
+          # Iniciar M2 en puerto 8002
+          ENGINE_STAGE=m2 GIT_COMMIT="${SHORT_SHA}" DATABASE_URL="${DATABASE_URL}" \
+            nohup python -m uvicorn api.main:app --host 127.0.0.1 --port 8002 > /tmp/m2.log 2>&1 &
+          
+          # Iniciar M3 en puerto 8003
+          ENGINE_STAGE=m3 GIT_COMMIT="${SHORT_SHA}" DATABASE_URL="${DATABASE_URL}" \
+            nohup python -m uvicorn api.main:app --host 127.0.0.1 --port 8003 > /tmp/m3.log 2>&1 &
+
+          # Esperar a que los 4 servicios esten listos y respondan HTTP 200
+          for port in 8000 8001 8002 8003; do
+            echo "Verificando disponibilidad de puerto ${port}..."
+            until curl -s "http://127.0.0.1:${port}/api/v1/health" | grep -q '"status":"ok"'; do
+              sleep 1
+            done
+          done
+          echo "[OK] Los 4 entornos M0, M1, M2 y M3 estan activos y respondiendo."
+
+      - name: Smoke tests (verificar etapa, commit exacto y 200 000 filas antes de medir)
+        run: |
+          BASE_URL="http://127.0.0.1:8000" EXPECTED_STAGE="m0" EXPECTED_COMMIT="${SHORT_SHA}" python scripts/run_smoke_test.py
+          BASE_URL="http://127.0.0.1:8001" EXPECTED_STAGE="m1" EXPECTED_COMMIT="${SHORT_SHA}" python scripts/run_smoke_test.py
+          BASE_URL="http://127.0.0.1:8002" EXPECTED_STAGE="m2" EXPECTED_COMMIT="${SHORT_SHA}" python scripts/run_smoke_test.py
+          BASE_URL="http://127.0.0.1:8003" EXPECTED_STAGE="m3" EXPECTED_COMMIT="${SHORT_SHA}" python scripts/run_smoke_test.py
 
       - name: Capturar planes de ejecucion EXPLAIN ANALYZE en PostgreSQL (OE1 y OE3)
         run: |
           mkdir -p datos
           python -c "
           import json, requests
-          u1 = '${{ inputs.url_m1 }}'.rstrip('/')
-          u2 = '${{ inputs.url_m2 }}'.rstrip('/')
           out = {
-              'non_sargable_m1': requests.get(f'{u1}/api/v1/explain?stage=m1&batch_size=500', timeout=60).json(),
-              'sargable_indexed_m2': requests.get(f'{u2}/api/v1/explain?stage=m2&batch_size=500', timeout=60).json(),
+              'non_sargable_m1': requests.get('http://127.0.0.1:8001/api/v1/explain?stage=m1&batch_size=500', timeout=60).json(),
+              'sargable_indexed_m2': requests.get('http://127.0.0.1:8002/api/v1/explain?stage=m2&batch_size=500', timeout=60).json(),
           }
           with open('datos/explain_plans.json', 'w', encoding='utf-8') as f:
               json.dump(out, f, indent=2, ensure_ascii=False)
@@ -67,25 +102,60 @@ jobs:
         run: |
           SIZES="10 50 200 500"
           for SIZE in $SIZES; do
-            echo "=== Midiendo lote SIZE=${SIZE} ==="
-            k6 run --out csv="datos/raw_m0_${SIZE}.csv"               -e BASE_URL="${{ inputs.url_m0 }}"               -e STAGE="m0"               -e BATCH_SIZE="${SIZE}"               -e COMMIT_SHA="${{ inputs.expected_commit }}"               -e ENFORCE_THRESHOLD="false"               loadtest/consolidacion_k6.js
+            echo "=========================================="
+            echo "=== Midiendo lote BATCH_SIZE=${SIZE} ==="
+            echo "=========================================="
+            k6 run --out csv="datos/raw_m0_${SIZE}.csv" \
+              -e BASE_URL="http://127.0.0.1:8000" \
+              -e STAGE="m0" \
+              -e BATCH_SIZE="${SIZE}" \
+              -e COMMIT_SHA="${SHORT_SHA}" \
+              -e ENFORCE_THRESHOLD="false" \
+              loadtest/consolidacion_k6.js
 
-            k6 run --out csv="datos/raw_m1_${SIZE}.csv"               -e BASE_URL="${{ inputs.url_m1 }}"               -e STAGE="m1"               -e BATCH_SIZE="${SIZE}"               -e COMMIT_SHA="${{ inputs.expected_commit }}"               -e ENFORCE_THRESHOLD="false"               loadtest/consolidacion_k6.js
+            k6 run --out csv="datos/raw_m1_${SIZE}.csv" \
+              -e BASE_URL="http://127.0.0.1:8001" \
+              -e STAGE="m1" \
+              -e BATCH_SIZE="${SIZE}" \
+              -e COMMIT_SHA="${SHORT_SHA}" \
+              -e ENFORCE_THRESHOLD="false" \
+              loadtest/consolidacion_k6.js
 
-            k6 run --out csv="datos/raw_m2_${SIZE}.csv"               -e BASE_URL="${{ inputs.url_m2 }}"               -e STAGE="m2"               -e BATCH_SIZE="${SIZE}"               -e COMMIT_SHA="${{ inputs.expected_commit }}"               -e ENFORCE_THRESHOLD="true"               loadtest/consolidacion_k6.js || echo "[AVISO] Umbral superado en M2 SIZE=${SIZE}; CSV conservado."
+            k6 run --out csv="datos/raw_m2_${SIZE}.csv" \
+              -e BASE_URL="http://127.0.0.1:8002" \
+              -e STAGE="m2" \
+              -e BATCH_SIZE="${SIZE}" \
+              -e COMMIT_SHA="${SHORT_SHA}" \
+              -e ENFORCE_THRESHOLD="true" \
+              loadtest/consolidacion_k6.js || echo "[AVISO] Umbral superado en M2 SIZE=${SIZE}; CSV conservado."
 
-            k6 run --out csv="datos/raw_m3_${SIZE}.csv"               -e BASE_URL="${{ inputs.url_m3 }}"               -e STAGE="m3"               -e BATCH_SIZE="${SIZE}"               -e COMMIT_SHA="${{ inputs.expected_commit }}"               -e ENFORCE_THRESHOLD="true"               loadtest/consolidacion_k6.js || echo "[AVISO] Umbral superado en M3 SIZE=${SIZE}; CSV conservado."
+            k6 run --out csv="datos/raw_m3_${SIZE}.csv" \
+              -e BASE_URL="http://127.0.0.1:8003" \
+              -e STAGE="m3" \
+              -e BATCH_SIZE="${SIZE}" \
+              -e COMMIT_SHA="${SHORT_SHA}" \
+              -e ENFORCE_THRESHOLD="true" \
+              loadtest/consolidacion_k6.js || echo "[AVISO] Umbral superado en M3 SIZE=${SIZE}; CSV conservado."
           done
 
       - name: Ejecutar analisis estadistico y generar figuras IEEE
-        run: python scripts/analyze_results.py --data-dir datos --out-dir resultados_resumen
+        run: |
+          python scripts/analyze_results.py --data-dir datos --out-dir resultados_resumen
 
       - name: Guardar artefactos (CSV crudos + EXPLAIN + estadisticos + figuras)
         uses: actions/upload-artifact@v4
         with:
-          name: evidencia-experimental-${{ inputs.expected_commit }}
+          name: evidencia-experimental-${{ env.SHORT_SHA }}
           path: |
             datos/raw_*.csv
             datos/explain_plans.json
             resultados_resumen/
           retention-days: 90
+
+      - name: Volcar logs de servicios en caso de fallo
+        if: failure()
+        run: |
+          echo "=== LOG M0 ===" && cat /tmp/m0.log || true
+          echo "=== LOG M1 ===" && cat /tmp/m1.log || true
+          echo "=== LOG M2 ===" && cat /tmp/m2.log || true
+          echo "=== LOG M3 ===" && cat /tmp/m3.log || true
