@@ -6,10 +6,10 @@
 \usepackage[spanish,es-tabla]{babel}
 \usepackage{amsmath,amssymb,amsfonts}
 \usepackage{graphicx}
-\usepackage{url}
 \usepackage{tabularx}
 \usepackage{array}
 \usepackage{booktabs}
+\usepackage[hidelinks]{hyperref}
 
 % Ajuste fino de espaciado vertical de figuras y tablas
 \setlength{\textfloatsep}{5pt plus 1pt minus 1pt}
@@ -30,7 +30,7 @@
 \title{Evaluación Experimental de la Intervención Incremental por Capas en la Eficiencia de Desempeño de una API REST de Consolidación Académica sobre PostgreSQL}
 
 \author{
-\IEEEauthorblockN{Roni Echavarría Coronado}
+\IEEEauthorblockN{Roni Echavarría Coronado\thanks{Repositorio público con código, DevOps, scripts de prueba y datos crudos: \url{https://github.com/Ronieczx/api-academica-ieee-gcp}}}
 \IEEEauthorblockA{\textit{Departamento Académico de Ingeniería y Tecnología Informática (DAITI)} \\
 \textit{Escuela Profesional de Ingeniería de Sistemas} \\
 \textit{Universidad Nacional José María Arguedas (UNAJMA)} \\
@@ -41,7 +41,7 @@ rechavarria@unajma.edu.pe}
 \maketitle
 
 \begin{abstract}
-En arquitecturas de software empresariales orientadas a servicios, las interfaces de programación de aplicaciones bajo el paradigma de transferencia de estado representacional implementadas en Python interactúan de manera intensiva con sistemas gestores de bases de datos relacionales, donde la consolidación sincrónica de registros a gran escala suele experimentar severas degradaciones temporales. Frente a un historial académico de doscientas mil matrículas gestionado sobre PostgreSQL, la operación por lote acumula defectos de diseño tales como consultas reiteradas por registro, predicados no sargables que invalidan índices y accesos redundantes al catálogo de asignaturas, superando ampliamente el umbral operativo predeclarado de un segundo en el percentil noventa y cinco para lotes de cincuenta o más estudiantes. Ante la ausencia de evidencia cuantitativa aislada por capas que cuantifique el impacto individual de cada técnica bajo condiciones reproducibles, este estudio evaluó empíricamente una estrategia incremental que abarca la agrupación de consultas en aplicación, la sargabilidad con índice compuesto en persistencia y la incorporación de memoria intermedia volátil en un entorno en la nube controlado. Las cuatrocientas ochenta mediciones formales ejecutadas demostraron que la eliminación del antipatrón de consulta iterativa reduce la latencia mediana en un 99,59\,\% para el lote máximo de quinientos registros, mientras que la sargabilidad indexada comprime el percentil noventa y cinco a 9,88 milisegundos con un tamaño del efecto de Cliff de magnitud grande frente a la línea base sin optimizar. Se concluye que la intervención combinada en aplicación y persistencia resulta suficiente para satisfacer el umbral de eficiencia temporal en todos los lotes analizados, evidenciando que la adición de memoria caché intermedia aporta ganancias marginales no estadísticamente significativas en lotes intermedios que no justifican su complejidad de mantenimiento.
+En arquitecturas de software empresariales, las interfaces de programación de aplicaciones bajo el estilo de transferencia de estado representacional implementadas en Python interactúan intensivamente con bases de datos relacionales para procesar transacciones críticas. En el sistema académico evaluado con doscientas mil matrículas sobre PostgreSQL, la consolidación sincrónica por lote alcanza 9982,06 ms en percentil noventa y cinco, superando ampliamente el umbral operacional predeclarado de 1000 ms. Ante la escasez de evaluaciones desagregadas, este trabajo evaluó el efecto incremental aislado de eliminar consultas iterativas en aplicación, aplicar predicados sargables con índice compuesto en persistencia e integrar memoria caché en un entorno cloud controlado. En 480 ejecuciones medidas, la latencia mediana descendió de 9554,22 ms a 39,08 ms en aplicación, 8,20 ms con persistencia sargable y 7,80 ms con caché, cruzando el umbral desde la primera intervención con p < 0,001 y delta de Cliff de 1,0. Se concluye que la eliminación de consultas iterativas concentra el 99,59\,\% de la reducción temporal total, mientras que la memoria caché aporta una ganancia marginal de 0,40 ms que no justifica su complejidad de mantenimiento.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -61,15 +61,13 @@ No obstante, cuando el volumen del historial acumulado de registros alcanza cien
 
 Para evaluar de forma concluyente la operabilidad del servicio, se establece un umbral de calidad operacional predeclarado (antes de la recolección de mediciones): la latencia en el percentil noventa y cinco ($p95$) de la operación sincrónica \texttt{POST /api/v1/consolidate} no debe exceder los $1000\text{ ms}$ ($1,0\text{ s}$) para lotes de 10, 50, 200 y 500 estudiantes sobre un catálogo de 200\,000 matrículas. Este umbral obedece a las directrices de usabilidad web interactiva y tolerancia a latencias en interfaces de usuario empresariales.
 
-A partir de este escenario, se formula la siguiente \textit{Pregunta de Investigación}:
-\begin{quote}
-¿En qué medida la optimización incremental en la capa de aplicación (eliminación de consultas N+1), la refactorización de consultas con índices compuestos en la capa de persistencia y la incorporación de caché en memoria reducen la latencia p95 de consolidación de historiales académicos frente a la implementación base sin optimizar, en una API REST en Python sobre un historial de 200\,000 registros en un entorno controlado?
-\end{quote}
+A partir de este escenario, se formula la investigación mediante la siguiente interrogante:
 
-En respuesta a esta interrogante, el \textit{Objetivo General} del estudio consiste en:
-\begin{quote}
-Evaluar en qué medida la intervención incremental en la capa de aplicación (consultas agrupadas), la capa de persistencia (predicados sargables e índice compuesto) y la incorporación de caché en memoria reducen la latencia p95 de consolidación de historiales académicos por debajo de 1,0 s frente a la implementación base, en una API REST en Python bajo entorno controlado.
-\end{quote}
+\textbf{Pregunta de Investigación:} ¿En qué medida la optimización incremental en la capa de aplicación (eliminación de consultas N+1), la refactorización de consultas con índices compuestos en la capa de persistencia y la incorporación de caché en memoria reducen la latencia p95 de consolidación de historiales académicos frente a la implementación base sin optimizar, en una API REST en Python sobre un historial de 200\,000 registros en un entorno controlado?
+
+En respuesta a esta interrogante, se establece la meta general del estudio:
+
+\textbf{Objetivo General:} Evaluar en qué medida la intervención incremental en la capa de aplicación (consultas agrupadas), la capa de persistencia (predicados sargables e índice compuesto) y la incorporación de caché en memoria reducen la latencia p95 de consolidación de historiales académicos por debajo de 1,0~s frente a la implementación base, en una API REST en Python bajo entorno controlado.
 
 Para operacionalizar el estudio, se definen los siguientes cuatro \textit{Objetivos Específicos}:
 \begin{itemize}
@@ -243,10 +241,20 @@ La investigación adhirió a prácticas rigurosas de reproducibilidad DevOps \ci
 \forall B \in \mathcal{D}_{\text{lotes}}, \quad f_{\text{M0}}(B) \equiv f_{\text{M1}}(B) \equiv f_{\text{M2}}(B) \equiv f_{\text{M3}}(B)
 \end{equation}
 
-El código fuente, scripts de despliegue, configuración k6 y datos crudos se encuentran versionados públicamente en GitHub:
-\begin{center}
-\url{https://github.com/Ronieczx/api-academica-ieee-gcp}
-\end{center}
+Para garantizar auditoría y reproducibilidad total de los entregables, el repositorio público aloja los artefactos estructurados según la siguiente trazabilidad operativa:
+\begin{itemize}
+    \setlength{\itemsep}{0.5pt}
+    \setlength{\parskip}{0pt}
+    \item \textbf{Código API por etapas:} \texttt{api/main.py}, \texttt{api/engine\_m0.py} a \texttt{api/engine\_m3.py}.
+    \item \textbf{Decisión de arquitectura:} \texttt{docs/adr/ADR-001-runner-cloud-vs-gcp-microservicios.md}.
+    \item \textbf{Contenedor y dependencias:} \texttt{Dockerfile}, \texttt{docker-compose.yml}, \texttt{requirements.txt}.
+    \item \textbf{Automatización CI/CD y benchmark:} \texttt{.github/workflows/ci.yml}, \texttt{.github/workflows/benchmark.yml}.
+    \item \textbf{Poblado determinístico y verificación:} \texttt{scripts/seed\_db.py}, \texttt{scripts/run\_smoke\_test.py}.
+    \item \textbf{Pruebas de carga y análisis:} \texttt{loadtest/k6\_consolidate.js}, \texttt{scripts/analyze\_results.py}.
+    \item \textbf{Planes de ejecución y datos crudos:} \texttt{datos/explain\_plans.json}, 16 matrices \texttt{datos/raw\_m*.csv}.
+\end{itemize}
+
+El repositorio público con el código fuente completo, pipelines y datos crudos se encuentra disponible en: \url{https://github.com/Ronieczx/api-academica-ieee-gcp}.
 
 \subsection{Diseño Experimental y Plan de Pruebas}
 Se implementó un diseño experimental cuantitativo pre-experimental con comparaciones inter-etapas sobre un único commit inmutable (\texttt{f19645a}). La Tabla~\ref{tab:diseno_exp} detalla la matriz de tratamiento experimental.
@@ -485,7 +493,9 @@ El trabajo futuro se deriva directamente de las limitaciones señaladas:
     \item Cuantificar el sobrecosto de memoria RAM y la sobrecarga de invalidación reactiva de caché en memoria mediante buses de eventos distribuidos.
 \end{enumerate}
 
-\newpage
+\subsection{Disponibilidad de Artefactos y Datos Reproducibles}
+Todos los recursos computacionales desarrollados para la investigación (código fuente de la API en sus cuatro etapas, configuraciones de infraestructura Docker y flujos CI/CD, planes físicos EXPLAIN ANALYZE, scripts de prueba de carga k6, datos crudos en formato CSV y scripts de análisis estadístico con bootstrap) se encuentran archivados y accesibles de forma pública y reproducible en el repositorio oficial de GitHub: \url{https://github.com/Ronieczx/api-academica-ieee-gcp}.
+
 \begin{thebibliography}{13}
 \footnotesize
 \setlength{\itemsep}{0pt}

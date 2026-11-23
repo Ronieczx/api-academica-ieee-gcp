@@ -1,0 +1,31 @@
+%% Minimal hyperref compatibility package for offline compilation with full PDF link support
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{hyperref}[2026/01/01 Minimal hyperref compatibility package]
+
+\DeclareOption*{%
+}
+\ProcessOptions\relax
+
+\RequirePackage{url}
+
+\makeatletter
+\def\UrlLeft{\pdfstartlink attr{/Border [0 0 0]} user{/Subtype /Link /A << /S /URI /URI (\Url@String) >>}}
+\def\UrlRight{\pdfendlink}
+
+\DeclareRobustCommand{\href}[2]{%
+  \pdfstartlink attr{/Border [0 0 0]} user{/Subtype /Link /A << /S /URI /URI (#1) >>}%
+  {#2}%
+  \pdfendlink%
+}
+
+\DeclareRobustCommand{\url}[1]{%
+  \pdfstartlink attr{/Border [0 0 0]} user{/Subtype /Link /A << /S /URI /URI (#1) >>}%
+  \texttt{#1}%
+  \pdfendlink%
+}
+
+\newcommand{\hypersetup}[1]{}
+\newcommand{\nolinkurl}[1]{\texttt{#1}}
+\newcommand{\hyperlink}[2]{#2}
+\newcommand{\hypertarget}[2]{#2}
+\makeatother
