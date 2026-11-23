@@ -2,6 +2,9 @@ name: benchmark-cloud
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - benchmark
 
 jobs:
   medicion_experimental:
