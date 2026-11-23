@@ -9,4 +9,4 @@ __pycache__/
 *.log
 .DS_Store
 figuras/*.png
-resultados_resumen/
+# resultados_resumen/
