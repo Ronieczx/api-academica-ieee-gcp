@@ -2,9 +2,14 @@
 \IEEEoverridecommandlockouts
 
 \usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-tabla]{babel}
 \usepackage{amsmath,amssymb,amsfonts}
 \usepackage{graphicx}
 \usepackage{url}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{booktabs}
 
 % Ajuste fino de espaciado vertical de figuras y tablas
 \setlength{\textfloatsep}{5pt plus 1pt minus 1pt}
@@ -30,7 +35,7 @@
 \textit{Escuela Profesional de Ingeniería de Sistemas} \\
 \textit{Universidad Nacional José María Arguedas (UNAJMA)} \\
 Andahuaylas, Apurímac, Perú \\
-roni.echavarria@unajma.edu.pe}
+rechavarria@unajma.edu.pe}
 }
 
 \maketitle
@@ -86,9 +91,9 @@ La Tabla~\ref{tab:operacionalizacion} formaliza la operacionalización de las va
 \centering
 \caption{Operacionalización Metodológica de Variables}
 \label{tab:operacionalizacion}
-\footnotesize
-\setlength{\tabcolsep}{2.5pt}
-\begin{tabular}{|p{1.7cm}|p{1.5cm}|p{2.3cm}|p{2.5cm}|}
+\scriptsize
+\setlength{\tabcolsep}{1.6pt}
+\begin{tabularx}{\columnwidth}{|>{\raggedright\arraybackslash}p{2.12cm}|>{\raggedright\arraybackslash}p{1.82cm}|>{\raggedright\arraybackslash}X|>{\raggedright\arraybackslash}p{2.18cm}|}
 \hline
 \textbf{Variable} & \textbf{Tipo y Rol} & \textbf{Indicador Formal} & \textbf{Línea Base / Control} \\
 \hline
@@ -100,7 +105,7 @@ Tamaño de Lote & Moderadora & Registros/req $\in \{10, 50, 200, 500\}$ & Unifor
 \hline
 Condiciones de Control & Control (VC) & 1 VU, $n=30$, SEED=2026, Linux x86\_64 & 200\,000 filas, Postgres 16, Python 3.12 congelado \\
 \hline
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 \section{Estado del Arte}
@@ -126,11 +131,11 @@ La Tabla~\ref{tab:literatura} sintetiza la literatura científica seleccionada c
 \centering
 \caption{Matriz Comparativa de Literatura Científica Relevante (2019--2026)}
 \label{tab:literatura}
-\footnotesize
-\setlength{\tabcolsep}{4.5pt}
-\begin{tabular}{|l|c|c|c|c|c|c|p{6.0cm}|}
+\scriptsize
+\setlength{\tabcolsep}{3.0pt}
+\begin{tabularx}{\textwidth}{|>{\raggedright\arraybackslash}p{2.8cm}|c|c|c|c|c|c|X|}
 \hline
-\textbf{Estudio} & \textbf{Capa Aplic.} & \textbf{Capa Persist.} & \textbf{Caché Aplic.} & \textbf{Percentiles} & \textbf{Aísla Etapas} & \textbf{API Python} & \textbf{Aporte Principal / Enfoque} \\
+\textbf{Estudio} & \textbf{Aplic.} & \textbf{Persist.} & \textbf{Caché} & \textbf{Perc.} & \textbf{Aísla} & \textbf{Python} & \textbf{Aporte Principal / Enfoque} \\
 \hline
 Yang et al. (2019) \cite{Yang2019} & Sí & Parcial & No & No & Sí & No & Optimización centrada en vistas y eliminación de cómputo redundante en Rails. \\
 \hline
@@ -158,7 +163,7 @@ Papadopoulos et al. (2021) \cite{Papadopoulos2021} & No & No & No & Sí & Sí & 
 \hline
 \textbf{Este Trabajo (2026)} & \textbf{Sí} & \textbf{Sí} & \textbf{Sí} & \textbf{Sí} & \textbf{Sí} & \textbf{Sí} & \textbf{Evaluación incremental aislada (M0--M3) con datos crudos y reproducible.} \\
 \hline
-\end{tabular}
+\end{tabularx}
 \end{table*}
 
 \subsection{Brecha de Investigación}
@@ -185,9 +190,9 @@ La selección de la arquitectura de experimentación requirió balancear aislami
 \centering
 \caption{Matriz de Decisión Arquitectónica para la Plataforma}
 \label{tab:decision_arq}
-\footnotesize
-\setlength{\tabcolsep}{2.0pt}
-\begin{tabular}{|p{2.3cm}|p{2.6cm}|p{3.1cm}|}
+\scriptsize
+\setlength{\tabcolsep}{1.8pt}
+\begin{tabularx}{\columnwidth}{|>{\raggedright\arraybackslash}p{2.16cm}|>{\raggedright\arraybackslash}X|>{\raggedright\arraybackslash}X|}
 \hline
 \textbf{Criterio} & \textbf{Alternativas Descartadas} & \textbf{Decisión Adoptada (Runner Cloud)} \\
 \hline
@@ -199,7 +204,7 @@ Reproducibilidad & Exige tarjetas bancarias y facturación comercial en la nube 
 \hline
 Atribución Causal & Latencia contaminada por egress o transporte distribuido & Atribución causal limpia y unívoca a la etapa de optimización intervenida. \\
 \hline
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 La justificación de la decisión arquitectónica adoptada radica en tres premisas metodológicas fundamentales:
@@ -244,14 +249,15 @@ El código fuente, scripts de despliegue, configuración k6 y datos crudos se en
 \end{center}
 
 \subsection{Diseño Experimental y Plan de Pruebas}
-Se implementó un diseño experimental cuantitativo pre-experimental con comparaciones inter-etapas sobre un único commit inmutable (\texttt{f19645a} / \texttt{43d9da3}). La Tabla~\ref{tab:diseno_exp} detalla la matriz de tratamiento experimental.
+Se implementó un diseño experimental cuantitativo pre-experimental con comparaciones inter-etapas sobre un único commit inmutable (\texttt{f19645a}). La Tabla~\ref{tab:diseno_exp} detalla la matriz de tratamiento experimental.
 
 \begin{table}[!ht]
 \centering
 \caption{Matriz del Diseño Experimental y Parámetros de Carga}
 \label{tab:diseno_exp}
-\footnotesize
-\begin{tabular}{|l|c|}
+\scriptsize
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabularx}{\columnwidth}{|>{\raggedright\arraybackslash}X|>{\raggedright\arraybackslash}p{3.8cm}|}
 \hline
 \textbf{Parámetro Experimental} & \textbf{Valor / Configuración} \\
 \hline
@@ -275,7 +281,7 @@ Herramienta de generación de carga & Grafana k6 v0.54.0 \\
 \hline
 Métrica primaria de análisis & Header \texttt{X-Process-Time-Ms} \\
 \hline
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 El uso de un único usuario secuencial (1 VU) elimina por completo el fenómeno de omisión coordinada (\textit{coordinated omission}), dado que cada solicitud se despacha estrictamente una vez completada y registrada la respuesta anterior, evitando colas artificiales del lado del cliente. La validez de cada entorno se constató antes de iniciar la carga mediante un script de prueba de humo (\texttt{run\_smoke\_test.py}), verificando el estado HTTP 200, la coincidencia del commit SHA y la integridad del catálogo poblado de 200\,000 filas.
@@ -299,8 +305,8 @@ La Tabla~\ref{tab:resultados_detallados} presenta los estimadores no paramétric
 \centering
 \caption{Resultados Numéricos de Comportamiento Temporal por Etapa y Tamaño de Lote ($n=30$ mediciones por celda)}
 \label{tab:resultados_detallados}
-\footnotesize
-\setlength{\tabcolsep}{3.0pt}
+\scriptsize
+\setlength{\tabcolsep}{2.2pt}
 \begin{tabular}{|c|c|r|c|r|r|r|r|r|c|c|}
 \hline
 \textbf{Lote} & \textbf{Etapa} & \textbf{Mediana (ms)} & \textbf{IC 95\% Bootstrap} & \textbf{IQR (ms)} & \textbf{p95 (ms)} & \textbf{p99 (ms)} & \textbf{Red. (ms)} & \textbf{Red. (\%)} & \textbf{Umbral $\le$ 1 s} & \textbf{Archivo de Datos Crudo} \\
@@ -335,8 +341,8 @@ Dada la asimetría de las distribuciones temporales observadas en la línea base
 \centering
 \caption{Pruebas de Hipótesis No Paramétricas, Significancia Estadística y Tamaño del Efecto}
 \label{tab:estadistica}
-\footnotesize
-\setlength{\tabcolsep}{2.6pt}
+\scriptsize
+\setlength{\tabcolsep}{2.2pt}
 \begin{tabular}{|c|c|r|c|r|c|r|c|}
 \hline
 \textbf{Lote} & \textbf{Comparación} & \textbf{Dif. Mediana (ms)} & \textbf{IC 95\% Bootstrap Dif.} & \textbf{Estadístico U} & \textbf{Valor $p$} & \textbf{Delta de Cliff ($\delta$)} & \textbf{Magnitud del Efecto} \\
@@ -393,8 +399,8 @@ En cumplimiento de los cánones de experimentación en ingeniería de software \
 \label{tab:amenazas}
 \scriptsize
 \renewcommand{\arraystretch}{0.92}
-\setlength{\tabcolsep}{1.8pt}
-\begin{tabular}{|p{2.1cm}|p{2.4cm}|p{3.5cm}|}
+\setlength{\tabcolsep}{2.0pt}
+\begin{tabularx}{\columnwidth}{|>{\raggedright\arraybackslash}p{1.9cm}|>{\raggedright\arraybackslash}p{2.2cm}|>{\raggedright\arraybackslash}X|}
 \hline
 \textbf{Categoría} & \textbf{Factor Específico} & \textbf{Mitigación Real Implementada} \\
 \hline
@@ -412,7 +418,7 @@ Validez Externa & Arquitectura y hardware único & Se acotan las inferencias a a
 \hline
 Validez Conclusión & Tamaño muestral insuficiente & Muestra predeclarada $n=30$ por celda, logrando significancia $p < 0,001$ y $\delta = 1,0$ en comparaciones clave. \\
 \hline
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 \section{Discusión}
@@ -479,6 +485,7 @@ El trabajo futuro se deriva directamente de las limitaciones señaladas:
     \item Cuantificar el sobrecosto de memoria RAM y la sobrecarga de invalidación reactiva de caché en memoria mediante buses de eventos distribuidos.
 \end{enumerate}
 
+\newpage
 \begin{thebibliography}{13}
 \footnotesize
 \setlength{\itemsep}{0pt}

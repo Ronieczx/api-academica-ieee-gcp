@@ -1,0 +1,40 @@
+\ProvidesLanguage{spanish}[2020/05/05 v5.0 Spanish language support]
+\LdfInit{spanish}\captionsspanish
+\ifx\l@spanish\@undefined
+  \@nopatterns{Spanish}
+  \adddialect\l@spanish0
+\fi
+\def\captionsspanish{%
+  \def\prefacename{Prefacio}%
+  \def\refname{Referencias}%
+  \def\abstractname{Resumen}%
+  \def\bibname{Bibliograf\'{\i}a}%
+  \def\chaptername{Cap\'{\i}tulo}%
+  \def\appendixname{Ap\'endice}%
+  \def\contentsname{\'Indice}%
+  \def\listfigurename{\'Indice de figuras}%
+  \def\listtablename{\'Indice de tablas}%
+  \def\indexname{\'Indice alfab\'etico}%
+  \def\figurename{Fig.}%
+  \def\tablename{Tabla}%
+  \def\partname{Parte}%
+  \def\enclname{Adjunto}%
+  \def\ccname{Copia a}%
+  \def\headtoname{A}%
+  \def\pagename{P\'agina}%
+  \def\seename{v\'ease}%
+  \def\alsoname{v\'ease tambi\'en}%
+  \def\proofname{Demostraci\'on}%
+  \def\glossaryname{Glosario}%
+}
+\def\datees{%
+  \def\today{\number\day\space de\space\ifcase\month\or
+    enero\or febrero\or marzo\or abril\or mayo\or junio\or
+    julio\or agosto\or septiembre\or octubre\or noviembre\or diciembre\fi
+    \space de\space\number\year}}
+\let\datespanish\datees
+\DeclareOption{es-tabla}{\def\tablename{Tabla}}
+\DeclareOption{es-cuadro}{\def\tablename{Cuadro}}
+\ProcessOptions*
+\ldf@finish{spanish}
+\endinput

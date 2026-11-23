@@ -1,0 +1,38 @@
+%% Minimal booktabs compatibility package
+\ProvidesPackage{booktabs}[2020/05/05 v1.61803398 Booktabs Core]
+\newdimen\heavyrulewidth
+\newdimen\lightrulewidth
+\newdimen\cmidrulewidth
+\newdimen\belowrulesep
+\newdimen\aboverulesep
+\newdimen\defaultaddspace
+\heavyrulewidth=0.08em
+\lightrulewidth=0.05em
+\cmidrulewidth=0.03em
+\belowrulesep=0.65ex
+\aboverulesep=0.4ex
+\defaultaddspace=0.5em
+
+\def\toprule{\noalign{\ifnum0=`}\fi
+  \hrule \@height \heavyrulewidth
+  \futurelet\@tempa\@toprule}
+\def\@toprule{\ifx\@tempa\toprule\vskip-\heavyrulewidth\fi
+  \ifnum0=`{\fi}}
+
+\def\midrule{\noalign{\ifnum0=`}\fi
+  \hrule \@height \lightrulewidth
+  \futurelet\@tempa\@midrule}
+\def\@midrule{\ifx\@tempa\midrule\vskip-\lightrulewidth\fi
+  \ifnum0=`{\fi}}
+
+\def\bottomrule{\noalign{\ifnum0=`}\fi
+  \hrule \@height \heavyrulewidth
+  \futurelet\@tempa\@bottomrule}
+\def\@bottomrule{\ifx\@tempa\bottomrule\vskip-\heavyrulewidth\fi
+  \ifnum0=`{\fi}}
+
+\def\cmidrule{\noalign{\ifnum0=`}\fi
+  \@ifnextchar[{\@cmidrule}{\@cmidrule[]}}
+\def\@cmidrule[#1]#2{\cline{#2}\ifnum0=`{\fi}}
+
+\endinput
