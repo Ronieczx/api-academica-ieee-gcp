@@ -1,0 +1,528 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{url}
+
+% Ajuste fino de espaciado vertical de figuras y tablas
+\setlength{\textfloatsep}{5pt plus 1pt minus 1pt}
+\setlength{\floatsep}{5pt plus 1pt minus 1pt}
+\setlength{\intextsep}{5pt plus 1pt minus 1pt}
+\setlength{\dbltextfloatsep}{6pt plus 1pt minus 1pt}
+\setlength{\dblfloatsep}{5pt plus 1pt minus 1pt}
+\setlength{\abovecaptionskip}{3pt}
+\setlength{\belowcaptionskip}{2pt}
+
+% Configuracion de idioma espanol en encabezados y etiquetas
+\renewcommand{\tablename}{Tabla}
+\renewcommand{\figurename}{Fig.}
+\renewcommand{\abstractname}{Resumen}
+
+\begin{document}
+
+\title{Evaluación Experimental de la Intervención Incremental por Capas en la Eficiencia de Desempeño de una API REST de Consolidación Académica sobre PostgreSQL}
+
+\author{
+\IEEEauthorblockN{Roni Echavarría Coronado}
+\IEEEauthorblockA{\textit{Departamento Académico de Ingeniería y Tecnología Informática (DAITI)} \\
+\textit{Escuela Profesional de Ingeniería de Sistemas} \\
+\textit{Universidad Nacional José María Arguedas (UNAJMA)} \\
+Andahuaylas, Apurímac, Perú \\
+roni.echavarria@unajma.edu.pe}
+}
+
+\maketitle
+
+\begin{abstract}
+En arquitecturas de software empresariales orientadas a servicios, las interfaces de programación de aplicaciones bajo el paradigma de transferencia de estado representacional implementadas en Python interactúan de manera intensiva con sistemas gestores de bases de datos relacionales, donde la consolidación sincrónica de registros a gran escala suele experimentar severas degradaciones temporales. Frente a un historial académico de doscientas mil matrículas gestionado sobre PostgreSQL, la operación por lote acumula defectos de diseño tales como consultas reiteradas por registro, predicados no sargables que invalidan índices y accesos redundantes al catálogo de asignaturas, superando ampliamente el umbral operativo predeclarado de un segundo en el percentil noventa y cinco para lotes de cincuenta o más estudiantes. Ante la ausencia de evidencia cuantitativa aislada por capas que cuantifique el impacto individual de cada técnica bajo condiciones reproducibles, este estudio evaluó empíricamente una estrategia incremental que abarca la agrupación de consultas en aplicación, la sargabilidad con índice compuesto en persistencia y la incorporación de memoria intermedia volátil en un entorno en la nube controlado. Las cuatrocientas ochenta mediciones formales ejecutadas demostraron que la eliminación del antipatrón de consulta iterativa reduce la latencia mediana en un 99,59\,\% para el lote máximo de quinientos registros, mientras que la sargabilidad indexada comprime el percentil noventa y cinco a 9,88 milisegundos con un tamaño del efecto de Cliff de magnitud grande frente a la línea base sin optimizar. Se concluye que la intervención combinada en aplicación y persistencia resulta suficiente para satisfacer el umbral de eficiencia temporal en todos los lotes analizados, evidenciando que la adición de memoria caché intermedia aporta ganancias marginales no estadísticamente significativas en lotes intermedios que no justifican su complejidad de mantenimiento.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Eficiencia de desempeño, interfaz de programación de aplicaciones, optimización de consultas, PostgreSQL, evaluación de rendimiento.
+\end{IEEEkeywords}
+
+\section{Introducción}
+
+En el desarrollo de sistemas de información contemporáneos, las interfaces de programación de aplicaciones bajo el estilo arquitectónico de transferencia de estado representacional (REST API) representan el estándar de facto para la integración desacoplada entre clientes y servicios de procesamiento transaccional \cite{diMeglio2024}. En el dominio de la gestión de información académica y curricular universitaria, las operaciones de cómputo consolidador de calificaciones y avance curricular constituyen procesos críticos sometidos a picos periódicos de demanda. Estos sistemas suelen desplegarse sobre plataformas basadas en Python y motores de bases de datos relacionales avanzados como PostgreSQL, combinando agilidad de desarrollo con robustez de persistencia ACID \cite{Bednarz2025,Taipalus2024}.
+
+No obstante, cuando el volumen del historial acumulado de registros alcanza cientos de miles de filas, los defectos de diseño acumulados en diferentes estratos de la arquitectura conllevan una degradación severa en el comportamiento temporal de las solicitudes sincrónicas. En una arquitectura estándar de tres niveles, es habitual la convergencia de tres fuentes de ineficiencia técnica:
+\begin{enumerate}
+    \item \textit{En la capa de aplicación:} el antipatrón de consultas $N+1$, donde el despachador de la API efectúa una consulta independiente hacia la base de datos por cada entidad recibida en el lote, sumado a algoritmos de búsqueda lineal $O(N)$ sobre estructuras estáticas en memoria \cite{Yang2019}.
+    \item \textit{En la capa de persistencia:} el uso de predicados de filtrado no sargables (\textit{Search Argument Able}), tales como la envoltura de funciones escalares \texttt{UPPER(columna) = UPPER(\$1)}, lo cual inutiliza los índices B-tree preexistentes y fuerza al planificador de PostgreSQL a realizar escaneos secuenciales completos (\textit{Sequential Scans}) sobre la totalidad de la tabla \cite{Liu2023}.
+    \item \textit{En la capa de acceso a datos estáticos:} la recarga redundante de metadatos curriculares transversales (catálogo de cursos) en cada invocación HTTP, generando operaciones innecesarias de entrada/salida (I/O) \cite{Mertz2021}.
+\end{enumerate}
+
+Para evaluar de forma concluyente la operabilidad del servicio, se establece un umbral de calidad operacional predeclarado (antes de la recolección de mediciones): la latencia en el percentil noventa y cinco ($p95$) de la operación sincrónica \texttt{POST /api/v1/consolidate} no debe exceder los $1000\text{ ms}$ ($1,0\text{ s}$) para lotes de 10, 50, 200 y 500 estudiantes sobre un catálogo de 200\,000 matrículas. Este umbral obedece a las directrices de usabilidad web interactiva y tolerancia a latencias en interfaces de usuario empresariales.
+
+A partir de este escenario, se formula la siguiente \textit{Pregunta de Investigación}:
+\begin{quote}
+¿En qué medida la optimización incremental en la capa de aplicación (eliminación de consultas N+1), la refactorización de consultas con índices compuestos en la capa de persistencia y la incorporación de caché en memoria reducen la latencia p95 de consolidación de historiales académicos frente a la implementación base sin optimizar, en una API REST en Python sobre un historial de 200\,000 registros en un entorno controlado?
+\end{quote}
+
+En respuesta a esta interrogante, el \textit{Objetivo General} del estudio consiste en:
+\begin{quote}
+Evaluar en qué medida la intervención incremental en la capa de aplicación (consultas agrupadas), la capa de persistencia (predicados sargables e índice compuesto) y la incorporación de caché en memoria reducen la latencia p95 de consolidación de historiales académicos por debajo de 1,0 s frente a la implementación base, en una API REST en Python bajo entorno controlado.
+\end{quote}
+
+Para operacionalizar el estudio, se definen los siguientes cuatro \textit{Objetivos Específicos}:
+\begin{itemize}
+    \item \textbf{OE1:} Caracterizar el rendimiento actual y medir la latencia p50, p95 y p99 de la operación de consolidación como línea base (M0) mediante perfilamiento de consultas y planes de ejecución EXPLAIN ANALYZE.
+    \item \textbf{OE2:} Implementar la eliminación de consultas N+1 mediante consultas agrupadas en lote y estructuras hash en la capa de aplicación (M1), verificando equivalencia funcional exacta frente a M0.
+    \item \textbf{OE3:} Refactorizar las consultas SQL a predicados sargables con índice compuesto en la capa de persistencia (M2) e incorporar caché en memoria con TTL para el catálogo curricular (M3).
+    \item \textbf{OE4:} Comparar estadísticamente las cuatro etapas (M0--M3) en cuatro tamaños de lote (10, 50, 200 y 500 registros) con 30 repeticiones medidas por condición, determinando significancia, tamaño del efecto y cumplimiento del umbral de 1,0 s.
+\end{itemize}
+
+En concordancia con estos objetivos, se establecen las hipótesis estadísticas de investigación:
+\begin{itemize}
+    \item \textbf{Hipótesis Nula ($H_0$):} La aplicación incremental de consultas agrupadas, índice compuesto con predicado sargable y caché en memoria no produce una reducción estadísticamente significativa en la latencia de consolidación frente a M0.
+    \item \textbf{Hipótesis Alterna ($H_1$):} La intervención incremental conjunta reduce la latencia mediana y p95 en al menos 80\,\% frente a M0 y sitúa el $p95 \le 1,0\text{ s}$ en los cuatro tamaños de lote evaluados, bajo condiciones controladas.
+\end{itemize}
+
+La Tabla~\ref{tab:operacionalizacion} formaliza la operacionalización de las variables analizadas bajo la norma ISO/IEC 25010:2011 \cite{ISO25010}.
+
+\begin{table}[!ht]
+\centering
+\caption{Operacionalización Metodológica de Variables}
+\label{tab:operacionalizacion}
+\footnotesize
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabular}{|p{1.7cm}|p{1.5cm}|p{2.3cm}|p{2.5cm}|}
+\hline
+\textbf{Variable} & \textbf{Tipo y Rol} & \textbf{Indicador Formal} & \textbf{Línea Base / Control} \\
+\hline
+Etapa Intervención & Independiente & Nivel $\in \{\text{M0..M3}\}$ & M0 base sin optimizar \\
+\hline
+Comportamiento Temporal & Dependiente & Latencia interna (ms): p50, p95, p99, IQR & M0 en lote 500: $p95 = 9982\text{ ms}$ (falla umbral) \\
+\hline
+Tamaño de Lote & Moderadora & Registros/req $\in \{10, 50, 200, 500\}$ & Uniforme en las 4 etapas \\
+\hline
+Condiciones de Control & Control (VC) & 1 VU, $n=30$, SEED=2026, Linux x86\_64 & 200\,000 filas, Postgres 16, Python 3.12 congelado \\
+\hline
+\end{tabular}
+\end{table}
+
+\section{Estado del Arte}
+
+\subsection{Protocolo de Revisión Sistemática Acotada}
+Para contextualizar el fenómeno y delimitar la frontera de conocimiento, se implementó una revisión sistemática acotada bajo lineamientos PRISMA durante la ventana temporal 2019--2026. Se interrogaron las tres bases de datos académicas principales mediante las cadenas booleanas estructuradas:
+\begin{itemize}
+    \item \textbf{IEEE Xplore:} \texttt{("query optimization" OR "application-level caching" OR "N+1" OR "database indexing") AND ("latency" OR "response time" OR "performance") AND ("REST API" OR "web application" OR "microservices" OR "monolith")}
+    \item \textbf{Scopus:} \texttt{TITLE-ABS-KEY(("query optimization" OR "application-level caching" OR "database indexing" OR "N+1") AND (latency OR "response time" OR "p95") AND ("REST API" OR "web application" OR "Python" OR "PostgreSQL"))}
+    \item \textbf{Google Scholar:} \texttt{("query optimization" OR "application-level caching" OR "database indexing") AND ("response time" OR latency) AND ("REST API" OR "web application" OR "Python")}
+\end{itemize}
+
+Los criterios de inclusión abarcaron: publicaciones revisadas por pares entre 2019 y 2026, estudios empíricos o metodológicos de evaluación de rendimiento, y redacción en inglés, español o portugués. Se excluyeron notas de divulgación comercial, artículos teóricos sin experimentación cuantificable, publicaciones sin acceso al texto íntegro y duplicados.
+
+El registro inicial identificó 562 documentos (148 en IEEE Xplore, 94 en Scopus y 320 en Google Scholar). Tras la remoción automatizada de 124 duplicados, se cribaron 438 registros por título y resumen, excluyendo 382 ajenos al foco de optimización de datos en APIs web. Se evaluó el texto completo de 56 publicaciones, descartando 44 por carecer de aislamiento de factores o métricas de percentiles, consolidando 12 estudios empíricos clave [1]--[12] complementados con la norma ISO/IEC 25010 [13].
+
+\textit{Declaración de uso de Inteligencia Artificial:} Se utilizó una herramienta de IA generativa para ampliar sinónimos, traducir términos y apoyar la redacción. La búsqueda, la selección de fuentes y la verificación de cada referencia fueron realizadas por el autor.
+
+\subsection{Matriz Comparativa de Literatura}
+La Tabla~\ref{tab:literatura} sintetiza la literatura científica seleccionada contrastando seis dimensiones analíticas de diseño y rigor metodológico.
+
+\begin{table*}[!t]
+\centering
+\caption{Matriz Comparativa de Literatura Científica Relevante (2019--2026)}
+\label{tab:literatura}
+\footnotesize
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{|l|c|c|c|c|c|c|p{6.0cm}|}
+\hline
+\textbf{Estudio} & \textbf{Capa Aplic.} & \textbf{Capa Persist.} & \textbf{Caché Aplic.} & \textbf{Percentiles} & \textbf{Aísla Etapas} & \textbf{API Python} & \textbf{Aporte Principal / Enfoque} \\
+\hline
+Yang et al. (2019) \cite{Yang2019} & Sí & Parcial & No & No & Sí & No & Optimización centrada en vistas y eliminación de cómputo redundante en Rails. \\
+\hline
+Liu et al. (2023) \cite{Liu2023} & No & Sí & No & Parcial & No & No & Explotación de restricciones de integridad para reescritura lógica de consultas. \\
+\hline
+Pantelic et al. (2026) \cite{Pantelic2026} & No & Sí & No & Sí & No & No & Benchmarking comparativo entre persistencia SQL y NoSQL en microservicios. \\
+\hline
+Redžepagić et al. (2026) \cite{Redzepagic2026} & No & Sí & No & Sí & No & No & Evaluación operacional de motores monolíticos vs. distribuidos en Kubernetes. \\
+\hline
+Mertz et al. (2021) \cite{Mertz2021} & Parcial & No & Sí & Parcial & Parcial & No & Directrices de implementación de memorias caché en el nivel de aplicación. \\
+\hline
+Meloca y Nunes (2022) \cite{Meloca2022} & No & No & Sí & No & No & No & Sistemas de recomendación para ubicación óptima de directivas de caché. \\
+\hline
+di Meglio y Starace (2024) \cite{diMeglio2024} & Sí & No & No & Sí & No & Sí & Comparación transversal de frameworks REST y entornos de ejecución en Python. \\
+\hline
+Bednarz y Miłosz (2025) \cite{Bednarz2025} & Sí & No & No & Parcial & No & Sí & Evaluación comparativa de rendimiento entre frameworks asíncronos en Python. \\
+\hline
+Blinowski et al. (2022) \cite{Blinowski2022} & Sí & Parcial & Parcial & Sí & No & No & Análisis de escalabilidad y degradación entre arquitecturas monolito y microservicios. \\
+\hline
+Bjørndal et al. (2021) \cite{Bjorndal2021} & No & Parcial & No & Parcial & No & No & Métricas de migración e impacto en latencia de transporte distribuido. \\
+\hline
+Taipalus (2024) \cite{Taipalus2024} & No & Sí & No & Sí & No & No & Revisión sistemática de metodologías de benchmarking en sistemas gestores de datos. \\
+\hline
+Papadopoulos et al. (2021) \cite{Papadopoulos2021} & No & No & No & Sí & Sí & No & Principios de reproducibilidad y control experimental riguroso en la nube. \\
+\hline
+\textbf{Este Trabajo (2026)} & \textbf{Sí} & \textbf{Sí} & \textbf{Sí} & \textbf{Sí} & \textbf{Sí} & \textbf{Sí} & \textbf{Evaluación incremental aislada (M0--M3) con datos crudos y reproducible.} \\
+\hline
+\end{tabular}
+\end{table*}
+
+\subsection{Brecha de Investigación}
+A partir del análisis sistemático condensado en la matriz comparativa, se identifica una brecha concreta en la literatura científica. No se halló evidencia del efecto incremental y aislado por etapas de eliminar consultas N+1, refactorizar predicados con índice compuesto e incorporar caché en memoria, medido mediante mediana, p95, p99 y pruebas no paramétricas con datos crudos reproducibles en una API REST en Python sobre un historial de 200\,000 registros. Las investigaciones precedentes evalúan estas técnicas como paquetes cerrados o en ecosistemas basados en Java y Ruby, omitiendo el análisis incremental que permita discernir el punto exacto en que la persistencia supera la necesidad de caché en memoria. Asimismo, la mayoría de benchmarks reportan promedios globales vulnerables al sesgo de asimetría y omiten matrices de datos crudos descargables. Este trabajo aborda dicha brecha de forma reproducible, aislando cada factor sobre el mismo artefacto inmutable desplegado.
+
+\section{Propuesta y Diseño Metodológico}
+
+\subsection{Modelo Conceptual}
+El diseño de la investigación se sustenta en el modelo conceptual de causalidad ilustrado en la Fig.~\ref{fig:modelo_conceptual}. Dicho esquema formaliza las interrelaciones operativas entre constructos sin introducir dependencias comerciales o nombres propietarios.
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.88\columnwidth]{figuras/fig1_modelo_conceptual.png}
+\caption{Modelo conceptual de la investigación. Formaliza el efecto directo inverso hipotetizado $(-)$ de la Variable Independiente sobre la Variable Dependiente, la moderación directa $(+)$ del tamaño de lote y el efecto de amortiguación de escala $(?)$ bajo condiciones de control fijas.}
+\label{fig:modelo_conceptual}
+\end{figure}
+
+El modelo vincula directamente la Variable Independiente (VI) ordinal de cuatro niveles con la Variable Dependiente (VD) de Comportamiento Temporal. Se postula una relación causal inversa directa $(-)$, donde el avance en la madurez de la optimización por capas reduce monótonamente la latencia del servicio. Paralelamente, el Tamaño de Lote actúa como Variable Moderadora (VM), introduciendo un efecto directo positivo $(+)$ en el tiempo de ejecución y una interrogante analítica $(?)$ sobre cómo la optimización amortigua el crecimiento exponencial de la latencia al incrementar el lote de 10 a 500 registros.
+
+\subsection{Arquitectura del Sistema y Decisión Arquitectónica}
+La selección de la arquitectura de experimentación requirió balancear aislamiento experimental, control de variables confundidas y reproducibilidad universal. La Tabla~\ref{tab:decision_arq} resume el análisis multicriterio que sustentó la decisión adoptada, formalizada en el repositorio mediante el registro de arquitectura \texttt{ADR-001}.
+
+\begin{table}[!ht]
+\centering
+\caption{Matriz de Decisión Arquitectónica para la Plataforma}
+\label{tab:decision_arq}
+\footnotesize
+\setlength{\tabcolsep}{2.0pt}
+\begin{tabular}{|p{2.3cm}|p{2.6cm}|p{3.1cm}|}
+\hline
+\textbf{Criterio} & \textbf{Alternativas Descartadas} & \textbf{Decisión Adoptada (Runner Cloud)} \\
+\hline
+Aislamiento de Red & GCP Pago / Microservicios: fluctuación de red pública o inter-nodos & Enlace loopback 127.0.0.1 directo sin interferencia externa. \\
+\hline
+Control de Confusión & Riesgo de noisy neighbors y arranques en frío no predecibles & Host único, misma CPU, memoria compartida y commit inmutable. \\
+\hline
+Reproducibilidad & Exige tarjetas bancarias y facturación comercial en la nube & Flujo declarativo GitHub Actions 100\,\% abierto y auditable con 1 clic. \\
+\hline
+Atribución Causal & Latencia contaminada por egress o transporte distribuido & Atribución causal limpia y unívoca a la etapa de optimización intervenida. \\
+\hline
+\end{tabular}
+\end{table}
+
+La justificación de la decisión arquitectónica adoptada radica en tres premisas metodológicas fundamentales:
+En primer lugar, alojar la API REST en Python y el servicio de base de datos PostgreSQL 16 dentro de la misma máquina virtual controlada del runner en la nube elimina las fluctuaciones de latencia y pérdida de paquetes inherentes al transporte sobre redes públicas o arquitecturas distribuidas multi-nodo.
+En segundo lugar, confinar el intercambio de tráfico HTTP y TCP al enlace de bucle invertido (\textit{loopback}) permite que el cronómetro interno del servidor y el cliente k6 midan estrictamente el consumo de CPU y las operaciones de E/S del motor relacional, garantizando una atribución causal no contaminada hacia la variable independiente.
+En tercer lugar, orquestar la totalidad del experimento mediante un flujo declarativo y abierto de GitHub Actions garantiza que cualquier investigador independiente pueda auditar, inspeccionar los datos crudos y replicar exactamente las 480 mediciones sin depender de suscripciones de pago.
+
+La estructura modular interna del sistema se detalla en el Diagrama de Componentes de la Fig.~\ref{fig:componentes}, señalando la frontera del software, la inyección de la variable independiente y el punto exacto de toma del tiempo en el servidor.
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.88\columnwidth]{figuras/fig2_diagrama_componentes.png}
+\caption{Diagrama de componentes del servicio. Señala la frontera del sistema, los estratos arquitectónicos intervenidos (M0 a M3) y la ubicación del cronómetro interno en el servidor mediante la cabecera \texttt{X-Process-Time-Ms}.}
+\label{fig:componentes}
+\end{figure}
+
+El despliegue físico del experimento se ilustra en la Fig.~\ref{fig:despliegue}, destacando la coexistencia de las cuatro etapas ejecutadas en puertos independientes desde el mismo commit inmutable.
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.88\columnwidth]{figuras/fig3_diagrama_despliegue.png}
+\caption{Diagrama de despliegue experimental en runner controlado en la nube (GitHub Actions). Detalla el aislamiento de procesos por puertos, la conexión loopback hacia el contenedor de PostgreSQL 16 y los parámetros fijos de control.}
+\label{fig:despliegue}
+\end{figure}
+
+El orden secuencial de intervención arquitectónica responde a una lógica metodológica estricta:
+\begin{enumerate}
+    \item \textbf{M0 $\to$ M1 (Aplicación):} Se sustituyen las $N$ consultas iterativas individuales por una única sentencia SQL parametrizada (\texttt{WHERE UPPER(student\_code) = ANY(\$1)}) y se agrupan los historiales en memoria mediante diccionarios hash $O(1)$. Se mantiene deliberadamente el predicado no sargable \texttt{UPPER} para aislar cuantitativamente la ganancia algorítmica en aplicación antes de intervenir la persistencia (cumplimiento de OE2).
+    \item \textbf{M1 $\to$ M2 (Persistencia):} Habiendo resuelto el cuello de botella en aplicación, se transforma el predicado SQL a formato sargable puro (\texttt{WHERE student\_code = ANY(\$1)}) permitiendo al optimizador activar el índice B-tree compuesto \texttt{idx\_enrollments\_student\_term(student\_code, term\_code)} (cumplimiento de OE3).
+    \item \textbf{M2 $\to$ M3 (Caché en Aplicación):} Sobre la persistencia indexada, se añade una memoria caché en RAM con tiempo de vida (TTL) de 300 segundos para evitar consultar reiteradamente la tabla estática de 500 asignaturas (cumplimiento de OE3).
+\end{enumerate}
+
+\subsection{Prácticas DevOps, CI/CD e Instrumentación}
+La investigación adhirió a prácticas rigurosas de reproducibilidad DevOps \cite{Papadopoulos2021}. El pipeline de Integración Continua (\texttt{.github/workflows/ci.yml}) verifica en cada confirmación de código la ausencia de archivos temporales de compilación (\texttt{\_\_pycache\_\_}), compila estáticamente los módulos y ejecuta una suite completa de pruebas unitarias y de integración sobre PostgreSQL 16. Crucialmente, la suite incluye una prueba de \textit{equivalencia funcional estricta}, certificando mediante aserciones unitarias que para cualquier lote de entrada idéntico, la salida JSON generada por las cuatro etapas es matemáticamente indistinguible:
+\begin{equation}
+\forall B \in \mathcal{D}_{\text{lotes}}, \quad f_{\text{M0}}(B) \equiv f_{\text{M1}}(B) \equiv f_{\text{M2}}(B) \equiv f_{\text{M3}}(B)
+\end{equation}
+
+El código fuente, scripts de despliegue, configuración k6 y datos crudos se encuentran versionados públicamente en GitHub:
+\begin{center}
+\url{https://github.com/Ronieczx/api-academica-ieee-gcp}
+\end{center}
+
+\subsection{Diseño Experimental y Plan de Pruebas}
+Se implementó un diseño experimental cuantitativo pre-experimental con comparaciones inter-etapas sobre un único commit inmutable (\texttt{f19645a} / \texttt{43d9da3}). La Tabla~\ref{tab:diseno_exp} detalla la matriz de tratamiento experimental.
+
+\begin{table}[!ht]
+\centering
+\caption{Matriz del Diseño Experimental y Parámetros de Carga}
+\label{tab:diseno_exp}
+\footnotesize
+\begin{tabular}{|l|c|}
+\hline
+\textbf{Parámetro Experimental} & \textbf{Valor / Configuración} \\
+\hline
+Etapas evaluadas & 4 niveles (M0, M1, M2, M3) \\
+\hline
+Tamaños de lote evaluados & 4 niveles (10, 50, 200, 500 registros) \\
+\hline
+Condiciones experimentales totales & 16 condiciones independientes \\
+\hline
+Concurrencia del generador k6 & 1 Usuario Virtual (VU) secuencial \\
+\hline
+Iteraciones brutas por condición & 35 ejecuciones continuas \\
+\hline
+Iteraciones de calentamiento descartadas & 5 ejecuciones iniciales por archivo \\
+\hline
+Muestras válidas por condición ($n$) & 30 mediciones netas \\
+\hline
+Total de mediciones netas analizadas & 480 observaciones empíricas \\
+\hline
+Herramienta de generación de carga & Grafana k6 v0.54.0 \\
+\hline
+Métrica primaria de análisis & Header \texttt{X-Process-Time-Ms} \\
+\hline
+\end{tabular}
+\end{table}
+
+El uso de un único usuario secuencial (1 VU) elimina por completo el fenómeno de omisión coordinada (\textit{coordinated omission}), dado que cada solicitud se despacha estrictamente una vez completada y registrada la respuesta anterior, evitando colas artificiales del lado del cliente. La validez de cada entorno se constató antes de iniciar la carga mediante un script de prueba de humo (\texttt{run\_smoke\_test.py}), verificando el estado HTTP 200, la coincidencia del commit SHA y la integridad del catálogo poblado de 200\,000 filas.
+
+\section{Evaluación Experimental y Resultados}
+
+En esta sección se reportan estrictamente los hechos experimentales y valores numéricos derivados de las 480 mediciones crudas, prescindiendo de adjetivos valorativos.
+
+\subsection{Evidencia de Perfilamiento EXPLAIN ANALYZE}
+El perfilamiento interno del motor PostgreSQL 16 sobre el historial de 200\,000 matrículas corroboró la alteración física en el plan de acceso entre las etapas no sargables y sargables. Para un lote de 500 estudiantes, el plan capturado en \texttt{explain\_plans.json} reportó:
+\begin{itemize}
+    \item \textbf{Etapa M1 (Predicado no sargable):} Ejecución forzada de \texttt{Seq Scan on enrollments} con costo estimado \texttt{1.25..5371.25}. El filtro escalar descartó 195\,000 filas en memoria (\texttt{Rows Removed by Filter: 195000}) requiriendo 1870 bloques compartidos (\texttt{Buffers: shared hit=1870}). El tiempo neto de ejecución del motor fue de \textbf{30,164 ms}.
+    \item \textbf{Etapa M2 (Predicado sargable con índice):} El optimizador seleccionó un \texttt{Bitmap Index Scan on idx\_enrollments\_student\_term} con costo \texttt{0.00..1803.50}, seguido de un \texttt{Bitmap Heap Scan}. El escaneo accedió únicamente a 47 bloques de heap (\texttt{Heap Blocks: exact=47}), reduciendo el tiempo de ejecución en PostgreSQL a \textbf{1,821 ms}.
+\end{itemize}
+Esta evidencia constata una reducción de 16,56 veces en el tiempo interno de ejecución de la base de datos atribuible exclusivamente a la sargabilidad sintáctica del predicado.
+
+\subsection{Resultados Globales de Latencia por Etapa}
+La Tabla~\ref{tab:resultados_detallados} presenta los estimadores no paramétricos de posición y dispersión calculados a partir de los 16 archivos CSV crudos archivados en el repositorio.
+
+\begin{table*}[!t]
+\centering
+\caption{Resultados Numéricos de Comportamiento Temporal por Etapa y Tamaño de Lote ($n=30$ mediciones por celda)}
+\label{tab:resultados_detallados}
+\footnotesize
+\setlength{\tabcolsep}{3.0pt}
+\begin{tabular}{|c|c|r|c|r|r|r|r|r|c|c|}
+\hline
+\textbf{Lote} & \textbf{Etapa} & \textbf{Mediana (ms)} & \textbf{IC 95\% Bootstrap} & \textbf{IQR (ms)} & \textbf{p95 (ms)} & \textbf{p99 (ms)} & \textbf{Red. (ms)} & \textbf{Red. (\%)} & \textbf{Umbral $\le$ 1 s} & \textbf{Archivo de Datos Crudo} \\
+\hline
+10 & M0 & 204,93 & [196,91; 206,56] & 19,72 & 231,15 & 251,32 & 0,00 & 0,00\,\% & Cumple & \texttt{raw\_m0\_10.csv} \\
+10 & M1 & 31,56 & [31,27; 34,07] & 3,32 & 35,98 & 39,50 & 173,37 & 84,60\,\% & Cumple & \texttt{raw\_m1\_10.csv} \\
+10 & M2 & 0,75 & [0,73; 0,76] & 0,05 & 1,12 & 1,81 & 204,18 & 99,63\,\% & Cumple & \texttt{raw\_m2\_10.csv} \\
+10 & M3 & 0,52 & [0,51; 0,54] & 0,04 & 0,86 & 0,91 & 204,41 & 99,74\,\% & Cumple & \texttt{raw\_m3\_10.csv} \\
+\hline
+50 & M0 & 988,19 & [968,84; 1004,12] & 48,56 & 1027,39 & 1052,32 & 0,00 & 0,00\,\% & Falla & \texttt{raw\_m0\_50.csv} \\
+50 & M1 & 32,61 & [32,31; 33,66] & 1,81 & 35,13 & 37,08 & 955,58 & 96,70\,\% & Cumple & \texttt{raw\_m1\_50.csv} \\
+50 & M2 & 1,22 & [1,21; 1,26] & 0,07 & 1,71 & 2,16 & 986,97 & 99,88\,\% & Cumple & \texttt{raw\_m2\_50.csv} \\
+50 & M3 & 1,05 & [1,04; 1,07] & 0,05 & 1,41 & 1,58 & 987,14 & 99,89\,\% & Cumple & \texttt{raw\_m3\_50.csv} \\
+\hline
+200 & M0 & 3779,77 & [3749,24; 3846,82] & 137,38 & 3934,63 & 4010,70 & 0,00 & 0,00\,\% & Falla & \texttt{raw\_m0\_200.csv} \\
+200 & M1 & 35,59 & [34,40; 36,26] & 2,76 & 39,13 & 40,08 & 3744,18 & 99,06\,\% & Cumple & \texttt{raw\_m1\_200.csv} \\
+200 & M2 & 4,41 & [4,00; 4,76] & 1,03 & 6,02 & 6,06 & 3775,36 & 99,88\,\% & Cumple & \texttt{raw\_m2\_200.csv} \\
+200 & M3 & 4,34 & [3,99; 5,03] & 1,60 & 7,15 & 8,79 & 3775,43 & 99,89\,\% & Cumple & \texttt{raw\_m3\_200.csv} \\
+\hline
+500 & M0 & 9554,22 & [9444,04; 9625,55] & 252,48 & 9982,06 & 10038,56 & 0,00 & 0,00\,\% & Falla & \texttt{raw\_m0\_500.csv} \\
+500 & M1 & 39,08 & [38,34; 40,63] & 3,78 & 43,88 & 44,33 & 9515,14 & 99,59\,\% & Cumple & \texttt{raw\_m1\_500.csv} \\
+500 & M2 & 8,20 & [8,06; 8,34] & 0,75 & 9,88 & 10,11 & 9546,02 & 99,91\,\% & Cumple & \texttt{raw\_m2\_500.csv} \\
+500 & M3 & 7,80 & [7,62; 7,90] & 0,46 & 8,32 & 9,70 & 9546,42 & 99,92\,\% & Cumple & \texttt{raw\_m3\_500.csv} \\
+\hline
+\end{tabular}
+\end{table*}
+
+\subsection{Análisis Estadístico No Paramétrico}
+Dada la asimetría de las distribuciones temporales observadas en la línea base, se aplicó la prueba bilateral de suma de rangos U de Mann-Whitney y se cuantificó la magnitud del efecto mediante el Delta de Cliff ($\delta$), complementado con intervalos de confianza del 95\,\% para la diferencia de medianas calculados mediante remuestreo bootstrap con 10\,000 repeticiones independientes (\texttt{comparaciones\_estadisticas.csv}). Los resultados se detallan en la Tabla~\ref{tab:estadistica}.
+
+\begin{table*}[!t]
+\centering
+\caption{Pruebas de Hipótesis No Paramétricas, Significancia Estadística y Tamaño del Efecto}
+\label{tab:estadistica}
+\footnotesize
+\setlength{\tabcolsep}{2.6pt}
+\begin{tabular}{|c|c|r|c|r|c|r|c|}
+\hline
+\textbf{Lote} & \textbf{Comparación} & \textbf{Dif. Mediana (ms)} & \textbf{IC 95\% Bootstrap Dif.} & \textbf{Estadístico U} & \textbf{Valor $p$} & \textbf{Delta de Cliff ($\delta$)} & \textbf{Magnitud del Efecto} \\
+\hline
+10 & M0 vs. M1 & 173,37 & [164,79; 175,11] & 900,0 & $3,02 \times 10^{-11}$ & 1,0000 & Grande ($p < 0,001$) \\
+10 & M1 vs. M2 & 30,81 & [30,52; 33,32] & 900,0 & $3,02 \times 10^{-11}$ & 1,0000 & Grande ($p < 0,001$) \\
+10 & M2 vs. M3 & 0,23 & [0,20; 0,24] & 823,0 & $3,64 \times 10^{-8}$ & 0,8289 & Grande ($p < 0,001$) \\
+10 & M0 vs. M3 & 204,41 & [196,39; 206,05] & 900,0 & $3,01 \times 10^{-11}$ & 1,0000 & Grande ($p < 0,001$) \\
+\hline
+50 & M0 vs. M1 & 955,58 & [936,14; 970,62] & 900,0 & $3,02 \times 10^{-11}$ & 1,0000 & Grande ($p < 0,001$) \\
+50 & M1 vs. M2 & 31,39 & [31,09; 32,44] & 900,0 & $3,02 \times 10^{-11}$ & 1,0000 & Grande ($p < 0,001$) \\
+50 & M2 vs. M3 & 0,17 & [0,15; 0,21] & 821,0 & $4,31 \times 10^{-8}$ & 0,8244 & Grande ($p < 0,001$) \\
+50 & M0 vs. M3 & 987,14 & [967,78; 1002,02] & 900,0 & $3,02 \times 10^{-11}$ & 1,0000 & Grande ($p < 0,001$) \\
+\hline
+200 & M0 vs. M1 & 3744,18 & [3713,55; 3811,32] & 900,0 & $3,02 \times 10^{-11}$ & 1,0000 & Grande ($p < 0,001$) \\
+200 & M1 vs. M2 & 31,18 & [29,90; 31,97] & 900,0 & $3,02 \times 10^{-11}$ & 1,0000 & Grande ($p < 0,001$) \\
+200 & M2 vs. M3 & 0,07 & [-0,76; 0,62] & 416,0 & $0,6204$ & -0,0756 & Despreciable (No significativo) \\
+200 & M0 vs. M3 & 3775,43 & [3744,76; 3842,48] & 900,0 & $3,02 \times 10^{-11}$ & 1,0000 & Grande ($p < 0,001$) \\
+\hline
+500 & M0 vs. M1 & 9515,14 & [9404,37; 9586,54] & 900,0 & $3,02 \times 10^{-11}$ & 1,0000 & Grande ($p < 0,001$) \\
+500 & M1 vs. M2 & 30,88 & [30,10; 32,43] & 900,0 & $3,02 \times 10^{-11}$ & 1,0000 & Grande ($p < 0,001$) \\
+500 & M2 vs. M3 & 0,40 & [0,22; 0,64] & 746,0 & $1,25 \times 10^{-5}$ & 0,6578 & Grande ($p < 0,001$) \\
+500 & M0 vs. M3 & 9546,42 & [9436,22; 9617,77] & 900,0 & $3,02 \times 10^{-11}$ & 1,0000 & Grande ($p < 0,001$) \\
+\hline
+\end{tabular}
+\end{table*}
+
+\subsection{Representación Gráfica de Distribuciones y Escalado}
+La Fig.~\ref{fig:boxplot} ilustra la distribución de latencia para el tamaño de lote máximo (500 estudiantes), graficando cajas y bigotes con las 30 observaciones netas superpuestas en escala logarítmica.
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.88\columnwidth]{figuras/fig_boxplot_etapas.png}
+\caption{Distribución empírica de latencia por etapa de optimización para el lote de 500 estudiantes ($n=30$ mediciones por etapa). Se evidencia la dispersión en escala logarítmica y la reducción en órdenes de magnitud desde M0 hasta M3.}
+\label{fig:boxplot}
+\end{figure}
+
+La Fig.~\ref{fig:escalado} muestra el comportamiento de la latencia en el percentil noventa y cinco ($p95$) en función del incremento en el tamaño de lote, confrontándolo con el umbral de 1000 ms.
+
+\begin{figure}[!ht]
+\centering
+\includegraphics[width=0.88\columnwidth]{figuras/fig_escalado_p95.png}
+\caption{Escalado de la latencia en el percentil noventa y cinco ($p95$) a través de los cuatro tamaños de lote (10, 50, 200 y 500 registros) confrontado con el umbral operacional predeclarado de 1000 ms.}
+\label{fig:escalado}
+\end{figure}
+
+\section{Amenazas a la Validez}
+
+En cumplimiento de los cánones de experimentación en ingeniería de software \cite{Papadopoulos2021}, se declararon siete amenazas metodológicas junto a sus medidas de mitigación aplicadas (Tabla~\ref{tab:amenazas}).
+
+\begin{table}[!ht]
+\centering
+\caption{Amenazas a la Validez Metodológica y Mitigaciones Reales}
+\label{tab:amenazas}
+\scriptsize
+\renewcommand{\arraystretch}{0.92}
+\setlength{\tabcolsep}{1.8pt}
+\begin{tabular}{|p{2.1cm}|p{2.4cm}|p{3.5cm}|}
+\hline
+\textbf{Categoría} & \textbf{Factor Específico} & \textbf{Mitigación Real Implementada} \\
+\hline
+Validez Interna & Vecino ruidoso (\textit{noisy neighbor}) & Instancia virtual aislada en runner cloud con 30 mediciones netas y estadística no paramétrica. \\
+\hline
+Validez Interna & Autoescalado y arranque en frío & Servicios preinicializados y activos antes de la carga, verificados por smoke test; sin scale-to-zero. \\
+\hline
+Validez Interna & Variabilidad de red pública & Enlace loopback directo local (127.0.0.1) y toma de tiempo interna con \texttt{X-Process-Time-Ms} en servidor. \\
+\hline
+Validez Constructo & Caché transitoria en PostgreSQL & Descarte sistemático de 5 iteraciones iniciales de calentamiento (\textit{warm-up}) por condición. \\
+\hline
+Validez Conclusión & Supuesto de normalidad & Uso de medianas, IQR, pruebas de rangos U de Mann-Whitney y remuestreo bootstrap (10\,000 muestras). \\
+\hline
+Validez Externa & Arquitectura y hardware único & Se acotan las inferencias a arquitecturas monolíticas modulares Python con PostgreSQL 16 relacional. \\
+\hline
+Validez Conclusión & Tamaño muestral insuficiente & Muestra predeclarada $n=30$ por celda, logrando significancia $p < 0,001$ y $\delta = 1,0$ en comparaciones clave. \\
+\hline
+\end{tabular}
+\end{table}
+
+\section{Discusión}
+
+\subsection{Atribución de la Reducción de Latencia por Capa}
+El análisis cuantitativo revela que la mayor contribución a la compresión temporal proviene de la capa de aplicación al corregir el antipatrón de consulta $N+1$ (etapa M1). Para el lote de 500 registros, M1 explica el 99,59\,\% de la reducción total frente a M0 (disminuyendo de 9554,22 ms a 39,08 ms). La transición a persistencia sargable e indexada (etapa M2) aporta una compresión incremental de 30,88 ms, situando la mediana en 8,20 ms (reducción acumulada del 99,91\,\%). La etapa de caché en memoria (M3) aportó una reducción incremental marginal de 0,40 ms en lote 500.
+
+Es imperativo reconocer que esta descomposición cuantitativa exhibe dependencia del orden de intervención (\textit{order dependency}). Si la persistencia sargable se hubiese aplicado antes de eliminar el antipatrón $N+1$, la indexación habría mitigado parcialmente el costo de cada una de las 500 consultas individuales; no obstante, el sobrecosto de 500 viajes de ida y vuelta (\textit{round-trips}) continuaría dominando el tiempo global, demostrando que resolver la proliferación de consultas en la aplicación constituye un prerrequisito sine qua non.
+
+\subsection{Significancia Estadística frente a Relevancia Práctica}
+Un hallazgo de notable trascendencia metodológica se evidencia al contrastar la significancia estadística con la relevancia práctica en la etapa M3 (incorporación de caché en memoria).
+En términos de cumplimiento operacional, la etapa M2 ya satisface holgadamente el umbral predeclarado de 1000 ms en los cuatro lotes analizados ($p95 = 1,12\text{ ms}$ en lote 10 y $p95 = 9,88\text{ ms}$ en lote 500). Si bien en lotes pequeños (10 y 50) la diferencia M2 vs. M3 alcanza significancia estadística formal ($p < 0,001$), su magnitud absoluta es de apenas 0,23 ms y 0,17 ms. Más aún, en el lote de 200 estudiantes, la diferencia entre M2 y M3 resulta no estadísticamente significativa ($p = 0,6204$, con un Delta de Cliff despreciable de $-0,0756$ y un intervalo de confianza bootstrap que abarca el cero: $[-0,76; 0,62]\text{ ms}$).
+
+En consecuencia, desde una perspectiva de ingeniería de software, la incorporación de caché en memoria para el catálogo no se encuentra justificada en la práctica: introduce complejidad arquitectónica, consumo adicional de memoria volátil y riesgo de inconsistencia de datos por invalidación de caché ante modificaciones curriculares, sin aportar una ganancia de rendimiento humanamente perceptible ni operativamente necesaria frente a una consulta sargable debidamente indexada.
+
+\subsection{Relación con el Estado del Arte}
+Los resultados obtenidos corroboran las observaciones de Yang et al. \cite{Yang2019} respecto a la primacía de la eliminación de accesos iterativos en la aplicación como vector dominante de optimización. Asimismo, coinciden con Liu et al. \cite{Liu2023} en cuanto a que los índices B-tree resultan inútiles en presencia de funciones de transformación no sargables. No obstante, este trabajo complementa los postulados de Mertz et al. \cite{Mertz2021} y Meloca y Nunes \cite{Meloca2022}: mientras estos autores recomiendan el uso ubicuo de caché a nivel de método, nuestros datos experimentales demuestran que cuando la persistencia subyacente opera bajo predicados sargables e índices compuestos, el beneficio de la caché de segundo nivel es marginal frente al costo de mantenimiento del ciclo de vida de los objetos en memoria.
+
+En concordancia con los estudios de rendimiento de frameworks REST en Python conducidos por di Meglio y Starace \cite{diMeglio2024} y Bednarz y Miłosz \cite{Bednarz2025}, se ratifica que FastAPI exhibe una sobrecarga interna mínima cuando la capa de datos responde en tiempos sub-milisegundos. Por último, la estabilidad observada en el runner sin contención respalda los principios de reproductibilidad experimental en entornos cloud formulados por Papadopoulos et al. \cite{Papadopoulos2021}.
+
+\subsection{Alcance de Calidad según ISO/IEC 25010:2011}
+De conformidad con el modelo de calidad de producto de software de la norma ISO/IEC 25010:2011 \cite{ISO25010}, se declara explícitamente el alcance y las fronteras de evaluación del presente estudio:
+\begin{enumerate}
+    \setlength{\itemsep}{1pt}
+    \setlength{\parskip}{0pt}
+    \item \textbf{Subcaracterística evaluada:} Únicamente se instrumentó y midió el \textit{Comportamiento Temporal} (\textit{time behaviour}) dentro de la característica de \textit{Eficiencia de Desempeño}.
+    \item \textbf{Subcaracterísticas no evaluadas:} No se midieron la \textit{Utilización de Recursos} (consumo dinámico de CPU, memoria RAM o ancho de banda) ni la \textit{Capacidad} (concurrencia máxima saturable o punto de quiebre del servicio), al haberse mantenido fijo el escenario en 1 VU secuencial.
+    \item \textbf{Impacto cruzado en Mantenibilidad:} Es verosímil que la introducción de estructuras hash especializadas en aplicación y módulos de caché en memoria (M3) incremente la complejidad ciclomática del código fuente, afectando adversamente subcaracterísticas de \textit{Mantenibilidad} tales como la modificabilidad y la testeabilidad.
+\end{enumerate}
+
+\section{Conclusiones y Trabajo Futuro}
+
+\subsection{Respuesta a la Pregunta de Investigación}
+En respuesta a la pregunta de investigación planteada, se concluye que la optimización incremental por capas reduce la latencia $p95$ de consolidación académica desde 9982,06 ms en la línea base (M0) hasta 43,88 ms mediante la agrupación de consultas en aplicación (M1), alcanzando 9,88 ms con la sargabilidad indexada en persistencia (M2) y 8,32 ms incorporando caché en memoria (M3), sobre un historial de 200\,000 registros en condiciones controladas. Esta reducción acumulada supera el 99,9\,\% y sitúa el $p95$ ampliamente por debajo del umbral predeclarado de 1,0 s en todos los tamaños de lote evaluados.
+
+\subsection{Conclusiones Específicas}
+\begin{enumerate}
+    \setlength{\itemsep}{0.5pt}
+    \setlength{\parskip}{0pt}
+    \setlength{\topsep}{1pt}
+    \item \textit{Primera conclusión:} La eliminación del antipatrón de consulta iterativa $N+1$ en la capa de aplicación constituye la intervención de mayor impacto cuantitativo absoluto, explicando más del 96\,\% de la ganancia en lotes medianos y el 99,59\,\% en lotes grandes, garantizando por sí sola el cumplimiento del umbral de 1,0 s.
+    \item \textit{Segunda conclusión:} La transformación sintáctica de predicados no sargables a formas compatibles con índices compuestos B-tree en PostgreSQL permite comprimir el tiempo interno del motor relacional en un factor de 16,56 veces (de 30,16 ms a 1,82 ms), habilitando respuestas sub-decamilisegundo incluso bajo lotes de 500 entidades.
+    \item \textit{Tercera conclusión:} Se refuta la hipótesis nula $H_0$ y se acepta plenamente la hipótesis alterna $H_1$, comprobándose que la intervención conjunta reduce en más de un 80\,\% la latencia de respuesta y satisface el umbral $p95 \le 1000\text{ ms}$ en todos los tratamientos analizados.
+\end{enumerate}
+
+\subsection{Limitaciones y Trabajo Futuro}
+Las limitaciones metodológicas del estudio se declaran formalmente en tres términos estructurados:
+\begin{itemize}
+    \setlength{\itemsep}{0.5pt}
+    \setlength{\parskip}{0pt}
+    \setlength{\topsep}{1pt}
+    \item \textbf{Limitación 1:} La evaluación se restringió a un escenario secuencial de carga con un único usuario virtual concurrente (1 VU), lo cual impide extrapolar el comportamiento temporal hacia condiciones de alta contención simultánea o saturación de conexiones en el pool relacional; para levantar esta condición, se requiere extender el banco de pruebas hacia perfiles de carga concurrente multi-usuario (10 a 500 VU).
+    \item \textbf{Limitación 2:} La base de datos operó sobre un conjunto acotado de 200\,000 registros de matrículas en un único nodo de almacenamiento, lo que restringe las inferencias a escalas institucionales medianas; para superar este alcance, se precisa evaluar el escalado del volumen de persistencia hasta órdenes de 10 a 50 millones de filas bajo estrategias de particionamiento horizontal (\textit{table partitioning}).
+    \item \textbf{Limitación 3:} Se instrumentó exclusivamente la subcaracterística de comportamiento temporal de la norma ISO/IEC 25010:2011, omitiendo la telemetría de consumo de memoria y ciclos de CPU; para completar el perfil de calidad de software, se requiere incorporar monitoreo de uso de recursos (\textit{resource utilization}) y métricas de complejidad estática de código.
+\end{itemize}
+
+El trabajo futuro se deriva directamente de las limitaciones señaladas:
+\begin{enumerate}
+    \setlength{\itemsep}{0.5pt}
+    \setlength{\parskip}{0pt}
+    \setlength{\topsep}{1pt}
+    \item Ejecutar pruebas de estrés y saturación concurrente en k6 para modelar la degradación temporal bajo contención del pool de conexiones.
+    \item Evaluar el rendimiento de consultas sargables combinadas con particionamiento declarativo por períodos académicos en volúmenes superiores a 10 millones de filas.
+    \item Cuantificar el sobrecosto de memoria RAM y la sobrecarga de invalidación reactiva de caché en memoria mediante buses de eventos distribuidos.
+\end{enumerate}
+
+\begin{thebibliography}{13}
+\footnotesize
+\setlength{\itemsep}{0pt}
+\setlength{\parskip}{0pt}
+
+\bibitem{Yang2019}
+J.~Yang, C.~Yan, C.~Wan, S.~Lu, and A.~Cheung, ``View-Centric Performance Optimization for Database-Backed Web Applications,'' in \emph{Proc. 41st IEEE/ACM Int. Conf. Softw. Eng. (ICSE)}, Montreal, QC, Canada, May 2019, pp. 994--1004, doi: 10.1109/ICSE.2019.00104.
+
+\bibitem{Liu2023}
+X.~Liu \emph{et~al.}, ``Leveraging Application Data Constraints to Optimize Database-Backed Web Applications,'' \emph{Proc. VLDB Endowment}, vol. 16, no. 6, pp. 1208--1221, 2023, doi: 10.14778/3583140.3583141.
+
+\bibitem{Pantelic2026}
+N.~Pantelic \emph{et~al.}, ``Benchmarking SQL and NoSQL Persistence in Microservices Under Variable Workloads,'' \emph{Future Internet}, vol. 18, no. 1, art. no. 53, Jan. 2026, doi: 10.3390/fi18010053.
+
+\bibitem{Redzepagic2026}
+J.~Redžepagić, A.~Kapulica, N.~Malešević, and V.~Dakić, ``Empirical Performance and Operational Analysis of Monolithic and Distributed Database Architectures in Kubernetes Environments,'' \emph{Computers}, vol. 15, no. 5, art. no. 282, Apr. 2026, doi: 10.3390/computers15050282.
+
+\bibitem{Mertz2021}
+J.~Mertz, I.~Nunes, L.~Della~Toffola, M.~Selakovic, and M.~Pradel, ``Satisfying Increasing Performance Requirements With Caching at the Application Level,'' \emph{IEEE Software}, vol. 38, no. 3, pp. 87--95, May--June 2021, doi: 10.1109/MS.2020.3033508.
+
+\bibitem{Meloca2022}
+R.~Meloca and I.~Nunes, ``A comparative study of application-level caching recommendations at the method level,'' \emph{Empirical Software Engineering}, vol. 27, art. no. 88, 2022, doi: 10.1007/s10664-021-10089-z.
+
+\bibitem{diMeglio2024}
+S.~di~Meglio and L.~L.~L. Starace, ``Evaluating Performance and Resource Consumption of REST Frameworks and Execution Environments: Insights and Guidelines for Developers and Companies,'' \emph{IEEE Access}, vol. 12, pp. 161649--161669, Nov. 2024, doi: 10.1109/ACCESS.2024.3489892.
+
+\bibitem{Bednarz2025}
+B.~Bednarz and M.~Miłosz, ``Benchmarking the performance of Python web frameworks,'' \emph{Journal of Computer Sciences Institute}, vol. 36, pp. 336--341, Sep. 2025, doi: 10.35784/jcsi.7738.
+
+\bibitem{Blinowski2022}
+G.~Blinowski, A.~Ojdowska, and A.~Przybyłek, ``Monolithic vs. Microservice Architecture: A Performance and Scalability Evaluation,'' \emph{IEEE Access}, vol. 10, pp. 20357--20374, Feb. 2022, doi: 10.1109/ACCESS.2022.3152803.
+
+\bibitem{Bjorndal2021}
+N.~Bjørndal, M.~Mazzara, A.~Bucchiarone, N.~Dragoni, and S.~Dustdar, ``Migration from Monolith to Microservices: Benchmarking a Case Study,'' \emph{Journal of Object Technology}, vol. 20, no. 2, pp. 3:1--3:17, 2021, doi: 10.5381/jot.2021.20.2.a3.
+
+\bibitem{Taipalus2024}
+T.~Taipalus, ``Database management system performance comparisons: A systematic literature review,'' \emph{Journal of Systems and Software}, vol. 208, art. no. 111872, Feb. 2024, doi: 10.1016/j.jss.2023.111872.
+
+\bibitem{Papadopoulos2021}
+A.~V. Papadopoulos \emph{et~al.}, ``Methodological Principles for Reproducible Performance Evaluation in Cloud Computing,'' \emph{IEEE Transactions on Software Engineering}, vol. 47, no. 8, pp. 1528--1543, Aug. 2021, doi: 10.1109/TSE.2019.2927908.
+
+\bibitem{ISO25010}
+International Organization for Standardization, \emph{Systems and software engineering --- Systems and software Quality Requirements and Evaluation (SQuaRE) --- System and software quality models}, ISO/IEC 25010:2011, Mar. 2011.
+
+\end{thebibliography}
+
+\end{document}
